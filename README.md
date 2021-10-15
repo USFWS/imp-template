@@ -1,2 +1,2 @@
 # IMP_RMarkdown
-RMarkdown template for creating Inventory and Monitoring Plans (IMPs) for National Wildlife Refuges.
+RMarkdown template for creating Inventory and Monitoring Plans (IMPs) for National Wildlife Refuges.  The template harvests survey information from the Planning and Review of I&M activities on Refuges (PRIMR) online database.  This includes information on selected surveys to populate Table 1, information on non-selected surveys to populate Appedix C, and answers to survey narratives for selected surveys.  The script also imports station-level information on Resources of Concern (ROC) and Nested ROCs from ArcGIS Online (AGOL).  This includes prioritization of ROCs, which the script uses to create appendices A (Priority ROCs) and B (Nested ROCs).  
