@@ -1,0 +1,884 @@
+---
+title: \Huge\textbf{Inventory and Monitoring Plan}
+author:
+- \LARGE\emph{IMP Template National Wildlife Refuge} #remove "\emph" for italics
+- \LARGE\emph{IMP Template National Wildlife Refuge Complex}
+date: "2020"
+header-includes:
+  - \usepackage{array,titling,caption,lscape,booktabs,float,geometry,changepage}
+  - \usepackage[labelfont=it]{caption}
+  - \captionsetup[figure]{labelformat=empty}
+  - \pretitle{\begin{center}\LARGE\includegraphics[width=15cm]{fws_banner.png}\\[\bigskipamount]}
+  - \posttitle{\end{center}}
+  - \newcommand{\blandscape}{\begin{landscape}}
+  - \newcommand{\elandscape}{\end{landscape}}
+  - \newcommand{\narrowmargin}{\margin=0.5in}
+  - \floatplacement{table}{H}
+  - \floatplacement{figure}{H}
+output: 
+  pdf_document:
+    latex_engine: lualatex
+urlcolor: blue
+linkcolor: black
+---
+
+```{r setup, include=FALSE, tinytex.verbose = TRUE}
+##############################################################################################
+## WE ULTIMATELY NEED TO FIGURE OUT HOW TO ADDRESS SUPERCOMPLEXES IN THIS PROCESS - 
+## LIKELY A SINGLE IMP WITH AN ROC TABLE AND TABLE 1 FOR EACH STATION?
+##############################################################################################
+## Set global chunk options
+knitr::opts_chunk$set(echo = FALSE,	message = FALSE, warning = FALSE, results = "as.is")
+
+## Install necessary R packages
+library(tidyverse)
+library(kableExtra)
+library(knitr)
+library(data.table)
+library(DBI)
+library(odbc)
+library(rlang)
+library(dbplyr)
+library(esri2sf)
+require(tidyselect)
+# tinytex::install_tinytex(repository = 'http://mirrors.ibiblio.org/pub/mirrors/CTAN/')
+
+
+
+## Function to change date fields from UNIX to human readable in tables imported from PRIMR
+fix_date <- function(x) as.POSIXct(x/1000, origin = "1970-01-01")
+
+###########################################################
+## Refuge-specific variables that are unlikely to change ##
+###########################################################
+## Number of resources of concern identified during the IMP process (written out)
+nroc <- "three"
+
+## Number of surveys included in the IMP
+nsurv <- 3
+nsurv2 <- "three"
+
+## Year IMP was finalized
+imp.year <- 2020
+
+## Participants, Number of days/Date of ROC workshop/discussion
+roc.participants <- c("Steve Hicks", "Kathy McPeak", "Orien Richmond", "and Jo Ann Dullum")
+roc.days <- "three"
+roc.date <- "March 26-28, 2019"
+
+## Year CCP was published
+ccp.year <- 1999
+
+## Refuge cost code for subsetting roc_df and species_df table and 
+## for Appendix A (an assigned code from IRIS Data Warehouse)
+refuge.costcode <- "FF06RBRP00"
+
+## Refuge Complex Name
+## Add Refuge Complex name, in quotes, if the station is part of a complex, otherwise leave as NA.  
+refuge.complex <- NA
+
+## Refuge website link
+refuge.link <- "[https://www.fws.gov/refuge/Fort_Niobrara/](https://www.fws.gov/refuge/Fort_Niobrara/)"
+
+########################################################################################
+## Variables Defined Below Need to be Completed by Refuges NOT within Legacy Region 6 ##
+########################################################################################
+## Link to a Refuge's CCP and 'Refuge Overview: History of Establishment' within the CCP
+## Numbers are taken from the ServCat URL of a DOWNLOADED CCP
+## Enter the numbers from each link as described; remainder of URL is automated below
+## Enter 5-digit number after the last '/' on CCP's URL; e.g., 25520 for this link: 'https://ecos.fws.gov/ServCat/DownloadFile/25520' 
+refuge.ccp <- NA
+
+## Enter CCP page number of establishment history; e.g., 10 for this link: 'https://ecos.fws.gov/ServCat/DownloadFile/5781#page=10'
+refuge.est.page <- NA
+```
+
+
+```{r AGOL_token}
+###################################################################################################
+##                          Import ROC data from Survey123 App of AGOL                           ##
+###################################################################################################
+## If the code below doesn't retrieve data from ArcGIS Online the token likely needs to be       ##
+## updated; tokens expire after ~ 2 weeks; see Word document for steps to get a new token        ##
+###################################################################################################
+## Manually pull the token from the serviceURL of the Feature Service created from ArcGIS online.  
+## You only need one token to access any layer.  This token will expire after a few weeks. 
+## Copy the token from URL and paste below between " ".
+token = "_7VT2XC5ylF0XKcQtr_W3Yhn8H8t_wOTwBtj-mIXmfXM-yorY6DV4OGGQvXtn8Bh94p-w4GEKKgGE8X50R0j1GpKNSd9IJX93R1w_rIxoh4nSEDQfz_sU0XI5yo2xDtqwLCoeP4EdVlHWWXu7Ek1xvykk8fK0duyGBdYs_dBAhl5KYw42YhEPqfIri71FcZp2LhnAiHXGAi8aF1pXnm6X3TtiTQJOGg7QRPPnW9HQPfNJUx6RysV82lVMHCaMAYx6PQx43x6EH7Ba-fpyxH25A.."
+
+```
+
+
+```{r connect_odbc}
+## Connect to IRIS DataWarehouse for downloading survey attributes
+con <- dbConnect(odbc(),
+        Driver = "ODBC Driver 17 for SQL Server",
+        Server = "ifw9ecos-bvdb11.fws.doi.net\\ecos_beta",
+        Database = "IRIS_DataWarehouse",
+        Trusted_Connection = "yes",
+        Port = 1433)
+```
+
+
+```{r reorder_columns_fxn}
+#############################################################################################
+##             Function to reorder columns after they are imported below                   ##
+## In SQL it is necessary to order columns so long columns are at the end of the dataframe ##
+#############################################################################################
+#' Reorder SQL columns; , include=FALSE
+#' @description Reorders a SQL table so that columns with \code{column_size==0} are ordered last. This allows the table to be read into R using ODBC/DBI and addresses the "Invalid descriptor error" (https://github.com/r-dbi/odbc/issues/309).
+#' @author McCrea Cobb \email{mccrea_cobb@@fws.gov}
+#' @param con An S4 object returned by \code{DBI::dbConnect()}. This object is used to communicate with the database engine.
+#' @param schema The schema of the database
+#' @param tbl_name The name of the desired table
+#' @return A dataframe
+#' @export
+#' @examples odbc_reorder(con, "Refuges", "DimSurvey")
+odbc_reorder <- function(con, schema, tbl_name) {
+#grab column names
+  all_cols <- odbc::odbcConnectionColumns(con, name = tbl_name, schema_name = schema) 
+#extract long column names
+  long_cols <- all_cols %>%
+  dplyr::filter(column_size == 0) %>%
+  pull(name)
+#extract the remaining column names
+  other_cols <- all_cols %>%
+  dplyr::filter(column_size > 0) %>%
+  pull(name)
+#put long columns at the end
+  ordered_cols <- unique(c(other_cols, long_cols))
+  dim_survey <- dplyr::tbl(con, in_schema(schema, tbl_name)) %>%
+  dplyr::select(tidyselect::all_of(ordered_cols)) %>%
+  collect()
+}
+```
+
+
+```{r table1}
+###############################
+## Import Table 1 from PRIMR ##
+###############################
+reorder_view <- odbc_reorder(con,"Refuges","VW_Table1") %>% mutate(ProtocolURL = ifelse(ProtocolURL=="" & ProtocolStatus == 'Initial Survey Instructions', InitialSurveyInstructionsLink, ProtocolURL))
+
+## Example code for partial matches of Station names to see if the table was imported by line above
+## Change the code in the grep function to the first few letters of the station of interest
+reorderSubset <- reorder_view[grep("Fort", reorder_view$Station), ]
+
+## Subset Region 6 refuges
+reorderR6Subset <- reorder_view[grep("FF06R", reorder_view$CostCenterCode), ]
+
+## Subset reorder_view to current refuge with costcode (defined in Setup chunk)
+## Use dplyr 'map_dfr' command to replace LaTeX special characters (apply won't work when only 1 record in table)
+survey_view <- filter(reorder_view, CostCenterCode == refuge.costcode) %>%
+                  select(., -c(SurveyPriority,InitialSurveyInstructionsLink)) %>% 
+                  rename(SurveyPriority = SurveyPriorityAsFloat) %>% 
+                  arrange(SurveyPriority) %>%
+                  map_dfr(., function(x) gsub("amp;amp;", "", x)) %>%
+                  map_dfr(., function(x) gsub("#", "\\#", x, fixed = T)) %>%
+                  map_dfr(., function(x) gsub("%", "\\%", x, fixed = T)) %>%
+                  map_dfr(., function(x) gsub("&", "\\&", x, fixed = T)) %>%
+                  map_dfr(., function(x) gsub("$", "\\$", x, fixed = T)) %>%
+                  map_dfr(., function(x) gsub("~", "\\~", x, fixed = T)) %>%
+                  map_dfr(., function(x) gsub("_", "\\_", x, fixed = T)) %>%
+                  map_dfr(., function(x) gsub("CCP /", "CCP:", x, fixed = T)) %>%
+                  map_dfr(., function(x) gsub(" /", " - ", x, fixed = T)) %>%
+                  map_dfr(., function(x) gsub(pattern = ('\\\\'), "\\textbackslash{}", x, fixed = T)) %>%
+                  map_dfr(., function(x) gsub("", "!?!", x, fixed = T)) %>%
+                  as_tibble(.)
+
+## Table of ranked surveys
+survey_table <- dplyr::select(survey_view[1:nsurv,], SurveyPriority, SurveyIDNumber, SurveyName, SurveyStatus, ManagementObjectives, SurveyArea, StaffTimeFTE, AvgAnnCostDollars, SurveyTiming, SurveyLength, SurveyCoordinator, ProtocolCitation, ProtocolStatus) 
+
+## Drop Station cost code from survey ID and add 3-digit survey number back to the table
+survey.no1 <- strsplit(survey_table$SurveyIDNumber, "-")
+survey.no <- sapply(survey.no1, "[")[2,] #THIS LINE WILL GIVE AN ERROR IF nsurv DOES NOT MATCH THE NUMBER OF SURVEYS IN survey.no1
+survey_table$SurveyIDNumber <- survey.no
+
+```
+
+
+```{r sql_queries, connection=con, output.var="markup_test"}
+##############################################
+##    Download DimSurvey table from PRIMR   ##
+##############################################
+## Download Survey data table ('DimSurvey') from PRIMR; this table includes basic information for each survey  
+## And Sanitized LaTeX special characters with preceding \\
+dim_survey <- odbc_reorder(con, "Refuges", "DimSurvey") %>%
+  filter(Station == refuge.costcode) %>%
+  select(ID, SurveyName, SurveyPriority, SurveyStatus, SurveyType, SurveyTypeCode, Frequency, SurveyTiming, SurveyLength, StartYear, EndYear, SurveyCode, SurveyArea, ResourceThemeLevel1, ResourceThemeLevel2, ResourceThemeLevel3, StaffTimeFTE, StaffTimeOther, SurveyCoordinatorName, ProtocolStatus, ProtocolTitle, ProtocolCitation, AnswerQ1, AnswerQ2, AnswerQ3, AnswerQ4, InitialSurveyInstructionsLink) %>%
+  mutate(ProtocolStatus = ifelse(ProtocolStatus == "UNK" & InitialSurveyInstructionsLink != "UNK", "Initial Survey Instructions", ProtocolStatus)) %>%
+  rename('Goals, Objectives, Strategies' = AnswerQ1,  'Survey Importance' = AnswerQ2, 'Population of Interest' = AnswerQ3, 'Cooperative Survey?' = AnswerQ4) %>%
+                  apply(., MARGIN=2, function(x) gsub("amp;amp;", "", x)) %>%
+                  apply(., MARGIN=2, function(x) gsub("#", "\\#", x, fixed = T)) %>%
+                  apply(., MARGIN=2, function(x) gsub("%", "\\%", x, fixed = T)) %>%
+                  apply(., MARGIN=2, function(x) gsub("&", "\\&", x, fixed = T)) %>%
+                  apply(., MARGIN=2, function(x) gsub("$", "\\$", x, fixed = T)) %>%
+                  apply(., MARGIN=2, function(x) gsub("~", "\\~", x, fixed = T)) %>%
+                  apply(., MARGIN=2, function(x) gsub("_", "\\_", x, fixed = T)) %>%
+                  apply(., MARGIN=2, function(x) gsub(pattern = ('\\\\'), "\\textbackslash{}", x, fixed = T)) %>%
+                  apply(., MARGIN=2, function(x) gsub("", "!?!", x, fixed = T)) %>%
+                  as_tibble(.)
+
+```
+
+
+```{r AppendixA}
+#########################################
+## Priority Resource of Concern Tables ##
+#########################################
+## Define each hosted feature layer's URL.
+## URL for Main ROC Table
+roc_url <- "https://services.arcgis.com/QVENGdaPbd4LUkLV/arcgis/rest/services/service_aa5abb632da5453e81616a071201e113/FeatureServer/1"
+
+###################################################################################################
+##                          Appendix A -- Priority Resources of Concern                          ##
+###################################################################################################
+## Create R objects for the ROC and Associated Species related tables.
+## And sanitize LaTeX special characters with preceding \\
+roc_df1 <- paste(roc_url, "query", sep = "/") %>% 
+  esri2sf:::getEsriFeatures(fields = "*", where = "1=1", bbox = NULL, token) %>% #runs query and returns all attributes except any attribute that is null for all records. MAY NEED TO ADD 'bbox = NULL, ' AFTER UPDATING?
+  lapply(function(i) {
+    i <- lapply(i, Filter, f = Negate(is.null))
+    # Return row
+    i$attributes
+  }) %>%
+  bind_rows() %>% 
+  mutate_at(vars(contains("date")), fix_date) %>% #fix date fields using fix_date function defined above.
+  select(station_costcode, globalid, complex, station, roc_rank, priority_eco_comm, ccphmp_name, purpose, rational, requirements, threats_limiting_factors, ccp_file, establishment_page) %>% #select subset of columns needed for the IMP Template ROC table. 
+  apply(., MARGIN=2, function(x) gsub("amp;amp;", "", x)) %>%
+  apply(., MARGIN=2, function(x) gsub("#", "\\#", x, fixed = T)) %>%
+  apply(., MARGIN=2, function(x) gsub("%", "\\%", x, fixed = T)) %>%
+  apply(., MARGIN=2, function(x) gsub("&", "\\&", x, fixed = T)) %>%
+  apply(., MARGIN=2, function(x) gsub("$", "\\$", x, fixed = T)) %>%
+  apply(., MARGIN=2, function(x) gsub("~", "\\~", x, fixed = T)) %>%
+  apply(., MARGIN=2, function(x) gsub("_", "\\_", x, fixed = T)) %>%
+  apply(., MARGIN=2, function(x) gsub(pattern = ('\\\\'), "\\textbackslash{}", x, fixed = T)) %>%
+  apply(., MARGIN=2, function(x) gsub("", "!?!", x, fixed = T)) %>%
+  as_tibble(.)
+
+## Subset roc_df1 by station cost code
+roc_df <- roc_df1[roc_df1$station_costcode == refuge.costcode,]
+
+```
+
+
+```{r AppendixB}
+###################################################################################################
+##                           Appendix B -- Nested Resources of Concern                           ##
+###################################################################################################
+## URL to access Associated Species Table
+species_url <- "https://services.arcgis.com/QVENGdaPbd4LUkLV/arcgis/rest/services/service_aa5abb632da5453e81616a071201e113/FeatureServer/2"
+
+species_df <- paste(species_url, "query", sep = "/") %>% 
+  esri2sf:::getEsriFeatures(fields = "*", where = "1=1", bbox = NULL, token) %>% #runs query and returns all attributes except any attribute that is null for all records. MAY NEED TO ADD 'bbox = NULL, ' AFTER UPDATING?
+  lapply(function(i) {
+    i <- lapply(i, Filter, f = Negate(is.null))
+    # Return row
+    i$attributes
+  }) %>%
+  bind_rows() %>% 
+  mutate_at(vars(contains("date")), fix_date) %>% #fix date fields using fix_date funtion defined above.
+  right_join(., roc_df, by = c("parentglobalid" = "globalid")) %>% #join to the roc_df dataframe which has the complex, refuge name, and stationID fields, roc_rank, roc name.
+  select(station_costcode, parentglobalid, complex, station, roc_rank, priority_eco_comm, priority_spec_cat, guild, common_name, federal_status, state_status, source_name)#select subset of columns needed for the IMP Template ROC nested ROCs
+
+## Create a column to address when a guild but not species provided in the table
+species_df$name_guild <- with(species_df, ifelse(is.na(common_name), guild, common_name))
+
+#######################################
+##         Format Appendix B         ##
+#######################################
+## Subset the 'species_df' table using 'station_costcode' and refuge.costcode 
+## And 'sanitize' LaTeX special characters in table text by escaping them with a preceding '\\'
+appndx_B <- species_df %>%
+                  filter(station_costcode==refuge.costcode) %>%
+                  arrange(roc_rank) %>%
+                  select(priority_eco_comm, roc_rank, name_guild, federal_status, source_name) %>%
+                  mutate_all(list(~replace_na(.,"-"))) %>%
+                  mutate(roc.rank=paste0(priority_eco_comm, " - ", roc_rank), .before=1, .keep="unused") %>%
+                  apply(., MARGIN=2, function(x) gsub("amp;amp;", "", x)) %>%
+                  apply(., MARGIN=2, function(x) gsub("#", "\\#", x, fixed = T)) %>%
+                  apply(., MARGIN=2, function(x) gsub("%", "\\%", x, fixed = T)) %>%
+                  apply(., MARGIN=2, function(x) gsub("&", "\\&", x, fixed = T)) %>%
+                  apply(., MARGIN=2, function(x) gsub("$", "\\$", x, fixed = T)) %>%
+                  apply(., MARGIN=2, function(x) gsub("~", "\\textasciitilde{}", x, fixed = T)) %>%
+                  apply(., MARGIN=2, function(x) gsub("_", "\\_", x, fixed = T)) %>%
+                  apply(., MARGIN=2, function(x) gsub(pattern = ('\\\\'), "\\textbackslash{}", x, fixed = T)) %>%
+                  apply(., MARGIN=2, function(x) gsub("", "!?!", x, fixed = T)) 
+
+## Example script for combining columns using dplyr
+#mutate(roc.rank=paste0(priority_eco_comm, " - ", roc_rank)) %>%
+```
+
+
+```{r AppendixC}
+## Create appendix table of current (not priority) and historic surveys  
+## Import Table with survey details ('VW_Surveys') from PRIMR and format for the IMP
+## The imported table includes ALL RECORDS and unnecessary columns
+## AND ESCAPE SPECIAL LaTeX characters # $ % & ~ _ ^ \ { }
+vw_surveys1 <- odbc_reorder(con,"Refuges","VW_Surveys")
+appndx_view <- filter(vw_surveys1, Station == refuge.costcode) %>%
+  apply(., MARGIN=2, function(x) gsub("amp;amp;", "", x)) %>%
+  apply(., MARGIN=2, function(x) gsub("#", "\\#", x, fixed = T)) %>%
+  apply(., MARGIN=2, function(x) gsub("%", "\\%", x, fixed = T)) %>%
+  apply(., MARGIN=2, function(x) gsub("&", "\\&", x, fixed = T)) %>%
+  apply(., MARGIN=2, function(x) gsub("$", "\\$", x, fixed = T)) %>%
+  apply(., MARGIN=2, function(x) gsub("~", "\\textasciitilde{}", x, fixed = T)) %>%
+  apply(., MARGIN=2, function(x) gsub("_", "\\_", x, fixed = T)) %>%
+  apply(., MARGIN=2, function(x) gsub(pattern = ('\\\\'), "\\textbackslash{}", x, fixed = T)) %>%
+  apply(., MARGIN=2, function(x) gsub("", "!?!", x, fixed = T)) %>%
+  as_tibble(.)
+
+## Create 'SurveyNameType', 'SurveyCoordinatorNameTitle', and 'AvgAnnCost' (with preceding $) columns for Table 1
+appndx_view$SurveyNameType <- with(appndx_view, paste0(SurveyName, " (", SurveyTypeCode, ")"))
+appndx_view$SurveyCoordinatorNameTitle <- with(appndx_view, paste0(SurveyCoordinatorName, ", ", SurveyCoordinatorTitle))
+
+survey_table_appndx1 <- dplyr::select(appndx_view, SurveyCode, SurveyName, SurveyStatus, ManagementObjectives, SurveyArea, StartYear, EndYear, SurveyCoordinatorName) %>%
+  arrange(SurveyStatus, StartYear) #, ProtocolCitation, ProtocolStatus
+
+survey.no2 <- strsplit(survey_table_appndx1$SurveyCode, "-")
+survey.no3 <- sapply(survey.no2, "[")[2,]
+survey_table_appndx1$SurveyCode <- survey.no3
+
+survey_table_appndx <- survey_table_appndx1[!(survey_table_appndx1$SurveyCode %in% c(survey_table$SurveyIDNumber)),] 
+```
+
+
+```{r Station_names}
+################################################
+## Set Refuge and Complex names and CCP links ##
+################################################
+## Refuge name (for automated captions)
+refuge.name <- unique(survey_view$Station)
+
+## Abbreviate NWR or WMD in name
+refuge.name2 <- ifelse(sapply(strsplit(refuge.name, split = " "), tail, 1)=="Refuge", sub("National Wildlife Refuge", "NWR", refuge.name), sub("Wetland Management District", "WMD", refuge.name)) 
+
+abbr <- ifelse(tail(unlist(strsplit(refuge.name, " ")),1)=="Refuge", "NWR", "WMD")
+
+## CCP URL file number for the link to download the document AND
+## CCP page number with Refuge Establishment history
+refuge.ccp <- ifelse(is.na(refuge.ccp), unique(roc_df$ccp_file), refuge.ccp)
+refuge.est.page <- ifelse(is.na(refuge.est.page), unique(roc_df$establishment_page),refuge.est.page)
+
+## Refuge CCP link (UPDATES AUTOMATICALLY USING refuge.ccp)
+ccp.link <- paste0("[https://ecos.fws.gov/ServCat/DownloadFile/", refuge.ccp, "](https://ecos.fws.gov/ServCat/DownloadFile/", refuge.ccp,")")
+
+## Refuge establishment section of CCP #NOT CURRENTLY USED; SOME CCPS AREN'T FORMATTED TO ALLOW THIS
+refuge.establishment <- paste0("[here]","(https://ecos.fws.gov/ServCat/DownloadFile/", refuge.ccp, "#page=", refuge.est.page, ")")
+```
+
+***
+
+\begin{center}
+
+```{r cover_photo, out.width = "70%", fig.align="center"}
+knitr::include_graphics("cover_photo.JPG")
+```
+
+\end{center}
+
+&nbsp; <!-- generates horizontal spacing -->
+
+```{r fws_emblem, out.width = "25%", fig.align = "right"}
+knitr::include_graphics("fws_shield.png")
+```
+
+\newpage
+\centering
+\LARGE\textbf{`r refuge.name`}
+
+\textbf{Inventory and Monitoring Plan}
+\normalsize
+
+&nbsp; <!-- generates horizontal spacing -->
+
+# Signature Page
+```{r signature_page}
+knitr::include_graphics("signature_page.jpg")
+```
+
+\raggedright
+\newpage
+\tableofcontents
+<!-- \listoffigures -->
+<!-- \listoftables -->
+\newpage
+
+# Introduction 
+
+This Inventory and Monitoring Plan (IMP) outlines natural resource surveys that will be conducted at `r refuge.name`  (`r abbr`)`r ifelse(is.na(refuge.complex),".", paste0(" within the ", refuge.complex, "."))`  The plan is valid for 15 years from the approval date and may be amended if the Refuge's Comprehensive Conservation Plan (CCP) is updated and/or a Habitat Management Plan (HMP) is completed, or if another need for revision is identified. Selected surveys have been identified as necessary for achieving the Refuge mission and informing management of priority habitats and/or species. Selected surveys may be ongoing surveys that 1) estimate a resource of concern's (ROC) current state for state-dependent management, 2) improve understanding of ROC response to management, or 3) are part of a regional and/or national survey effort. This IMP was developed according to the Inventory and Monitoring (I&M) policy (701 FW 2) for the National Wildlife Refuge System. 
+
+## Refuge Establishment
+
+An overview of `r paste0(refuge.name2, "'s")` history of establishment, acquisition, and management can be found within the Refuge's CCP, available `r refuge.establishment`; additional information about the Refuge is provided on their website `r refuge.link`.
+
+# Methods 
+
+The Refuge participated in an evaluation process to identify and prioritize all current, planned, expected, or desired surveys. Below is an outline of the survey prioritization and selection process. 
+
+* Refuge staff identified the top `r nroc` biological priorities for `r refuge.name2` (Appendix A) and reviewed existing CCP objectives[^1] to ensure they were specific, measurable, achievable, realistic and time-bound (SMART). Identifying the Refuge's biological priorities facilitates appropriate annual planning to ensure the complete workflow for priority surveys, from data collection to informing management decisions, can be completed with existing staff capacity.  Moreover, nested ROCs (i.e., species and/or species guilds associated with a priority ROC) were identified for each biological priority (Appendix B).
+
+* All current, planned, expected, or desired surveys are identified. Refuge staff summarized background information for each survey prior to prioritization. The Zone Biologist facilitated a `r roc.days`-day workshop `r roc.date`, to prioritize and rank all listed surveys. Participants included:  `r paste0(roc.participants, sep="")`.                  	
+	 
+* Surveys are ranked and prioritized into *Selected*, *Non-selected* or *Future*.
+    * **Selected**: High priority surveys that are included in the IMP.
+    * **Non-selected**: Surveys that: 
+        * Have been completed;
+        * Are not expected to meet National I&M policy goals of protocol development, data analysis and reporting;
+        * Are conducted to assist cooperators with data collection, but where the cooperator is not expected to develop a protocol or provide information to the Refuge.
+    * **Future**[^2]: Priority surveys that need: 
+        * Significant additional resources not currently available;
+        * Conceptual development to provide objectives linked to management priorities or efforts;
+        * Partner development and contribution. 
+
+* Selected surveys are categorized as either “current” or “expected”.
+    * **Current**: surveys that are highest priority I&M projects for the Refuge and are **currently conducted and have sufficient support for completion**. These surveys are the most applicable to Refuge goals and objectives. In addition, they were likely to assist many partners of the Refuge and provide assistance in landscape management.
+    * **Expected**: surveys that have not yet started but have a start date within the life of the IMP as the resources necessary to complete these surveys have been identified.
+
+* **Estimating Capacity** 
+    * The staff time or dollars required to complete a survey are roughly estimated using the IMP workbook (Table 1). These estimates should be considered draft; exact values or cost estimates were not entered into PRIMR. Staff time for selected surveys were estimated based on the amount of time spent to plan, collect, analyze and use data (i.e., development of habitat management prescriptions). Costs were estimated by evaluating potential contracts, equipment, and travel accommodations that could be required each year. 
+
+[^1]: Objectives for regional- and national-level surveys were not reviewed during this process.
+[^2]: Future surveys are ranked sequentially with selected surveys with the expectation that resources sufficient to complete them could become available during the lifespan of the IMP.
+
+# Results: Selected Surveys
+ 
+There were `r nsurv2` priority surveys selected for this IMP. Table 1 was created using PRIMR records for selected and expected surveys, providing essential information for each survey. The survey narratives provide an in-depth justification, explaining the importance and purpose of each survey.  Non-selected surveys are summarized in Appendix C. 
+
+\newpage
+\blandscape
+\captionsetup[table]{labelformat=empty}
+\thispagestyle{empty}
+\voffset = 0.85in
+\hoffset = -0.25in
+
+```{r table_1, results='asis'}
+# Table 1 names
+table1.names <- c("Survey Priority\\textsuperscript{1}","Survey ID No.\\textsuperscript{2}", "Survey Name\\textsuperscript{3}/ (Type)\\textsuperscript{4}", "Survey Status\\textsuperscript{5}","Mgmt. Objective\\textsuperscript{6}","Survey Area\\textsuperscript{7}", "Staff Time\\textsuperscript{8}","Ann. Cost\\textsuperscript{9}","Survey Timing\\textsuperscript{10}","Survey Length\\textsuperscript{11}","Survey Coord.\\textsuperscript{12}","Citation\\textsuperscript{13}","Status\\textsuperscript{14}") # \n can be placed in a column name to force a return, e.g. "Survey\n Area"
+
+## Table 1 caption
+table1.caption <- paste0("\\textbf{Table 1.} Surveys selected for conducting on ", refuge.name, " (", refuge.costcode,"), ", imp.year,"-", imp.year+15, ".")
+
+## 'escape = FALSE' necessary in call to kable to have LaTeX commands recognized in table and column names; rep('c',13), align= 'c',
+survey_table %>%
+kable(., "latex", booktabs = T, align='c', col.names = table1.names, caption = table1.caption, escape = FALSE) %>%
+  kable_styling(latex_options = c("striped", "hold_position"), font_size = 7) %>%
+  add_header_above(c(" " = 11, "Protocol" = 2), font_size = 10) %>%
+  column_spec(1:13, width = c("0.5in","0.5in","1.25in","0.5in","1.15in","0.65in","0.45in","0.45in","0.7in","0.5in","0.85in","0.5in","0.5in")) %>%
+  row_spec(0, font_size = 10) %>%
+  footnote(number = c("The rank for each survey listed in order of priority.", paste0("A unique identification number assigned by the computer.  This number is prefaced by the station cost-center code, ", refuge.costcode, "."), "Short titles for survey name, preferably the same names in station work plans.", "Type of survey: I = Inventory, CI = Cooperative Inventory, BM = Baseline Monitoring, CB = Cooperative Baseline Monitoring, M = Monitoring to Inform Management, CM = Cooperative Monitoring to Inform Management, R = Research, and CR = Cooperative Research.", "Selected surveys planned for the lifespan of this IMP (e.g., Current, Expected).", "The management plan and objectives that justify the selected survey.", "Station management unit names, entire station, or names of other landscape units included in survey.", "Estimates of Service (FWS) and non-Service (Other) staff time needed to complete the survey (1 work year = 2080 hrs = 1 FTE).", "Annual average operations cost for conducting the survey (e.g., equipment, contracts, travel); excluding staff time. $ = $0 to 4,999; $$ = $5,000 to 24.999; TBD = to be determined.", "Timing and frequency of survey field activities.", "The years during which the survey has been or will be conducted.", "Name and position of the Survey Coordinator for each survey.", "Title, author, and version of survey protocol (if there is no protocol to cite, enter None).", "Scale of intended use (National Framework, Regional Framework, Site-specific), and stage of approval of the survey protocol (Initial Survey Instructions, Complete Draft, In Review, or Approved)."), threeparttable = T)
+
+##########################################################################################
+## Create a table of survey attributes from dim_table for completing survey narratives  ##
+##########################################################################################
+survey_narratives <- dplyr::select(dim_survey, c(SurveyPriority, SurveyName, SurveyStatus, SurveyCode, 'Population of Interest','Goals, Objectives, Strategies','Survey Importance','Cooperative Survey?', ProtocolStatus, ProtocolTitle, InitialSurveyInstructionsLink)) %>% 
+  filter(., SurveyStatus != "Historic" & SurveyPriority %in% 1:nsurv) %>%
+  arrange(., SurveyPriority)
+
+```
+\vfill
+\newpage
+\elandscape
+
+## Surveys Conducted With Current or Additional Capacity
+
+## *1. `r survey_narratives$SurveyName[1]` (PRIMR ID: `r survey_narratives$SurveyCode[1]`)*
+
+***1)	What is the population or attribute of interest, and what will be measured, and when?***
+
+`r survey_narratives$'Population of Interest'[1]`
+
+&nbsp; <!-- generates horizontal spacing -->
+
+***2)	What refuge management goals and objective(s) does the survey support? Is/are the goal(s) or objective(s) derived from the CCP, interim objectives, an HMP, or the biological priorities? What strategies or strategy does the survey inform?***
+
+`r survey_narratives$'Goals, Objectives, Strategies'[1]`
+
+&nbsp; <!-- generates horizontal spacing -->
+
+***3)	Why is it important to conduct the survey? Describe how the survey results will be used to make better informed refuge management decisions. If survey results are used to trigger a management response, identify the management response and threshold value for comparison to survey results.***
+
+`r survey_narratives$'Survey Importance'[1]`
+
+&nbsp; <!-- generates horizontal spacing -->
+
+***4)	Is this a cooperative survey? If so, what partners are involved in the survey?***
+
+`r survey_narratives$'Cooperative Survey?'[1]`
+
+&nbsp; <!-- generates horizontal spacing -->
+
+***5) Protocol status?***
+
+`r ifelse(with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle))[1] == "UNK; NA","None.", ifelse(with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle))[1] == "Initial Survey Instructions; NA", with(survey_narratives, paste0("Initial Survey Instructions; ", "[",InitialSurveyInstructionsLink[1],"](",InitialSurveyInstructionsLink[1],")")), ifelse(with(survey_narratives, ProtocolStatus[1] == "National Approved", paste0("National Protocol; ", ProtocolTitle[1], "[",InitialSurveyInstructionsLink[1],"](",InitialSurveyInstructionsLink[1],")")), with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle,". ","[",InitialSurveyInstructionsLink,"](",InitialSurveyInstructionsLink,")"))[1])))`
+
+&nbsp; <!-- generates horizontal spacing -->
+
+## *2. `r survey_narratives$SurveyName[2]` (PRIMR ID: `r survey_narratives$SurveyCode[2]`)*
+
+***1)	What is the population or attribute of interest, and what will be measured, and when?***
+
+`r survey_narratives$'Population of Interest'[2]`
+
+&nbsp; <!-- generates horizontal spacing -->
+
+***2)	What refuge management goals and objective(s) does the survey support? Is/are the goal(s) or objective(s) derived from the CCP, interim objectives, an HMP, or the biological priorities? What strategies or strategy does the survey inform?***
+
+`r survey_narratives$'Goals, Objectives, Strategies'[2]`
+
+&nbsp; <!-- generates horizontal spacing -->
+
+***3)	Why is it important to conduct the survey? Describe how the survey results will be used to make better informed refuge management decisions. If survey results are used to trigger a management response, identify the management response and threshold value for comparison to survey results.***
+
+`r survey_narratives$'Survey Importance'[2]`
+
+&nbsp; <!-- generates horizontal spacing -->
+
+***4)	Is this a cooperative survey? If so, what partners are involved in the survey?***
+
+`r survey_narratives$'Cooperative Survey?'[2]`
+
+&nbsp; <!-- generates horizontal spacing -->
+
+***5) Protocol status?***
+
+`r ifelse(with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle))[2] == "UNK; NA","None.", ifelse(with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle))[2] == "Initial Survey Instructions; NA", with(survey_narratives, paste0("Initial Survey Instructions; ", "[",InitialSurveyInstructionsLink[2],"](",InitialSurveyInstructionsLink[2],")")), ifelse(with(survey_narratives, ProtocolStatus[2] == "National Approved", paste0("National Protocol; ", ProtocolTitle[2], "[",InitialSurveyInstructionsLink[2],"](",InitialSurveyInstructionsLink[2],")")), with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle,". ","[",InitialSurveyInstructionsLink,"](",InitialSurveyInstructionsLink,")"))[2])))`
+
+&nbsp; <!-- generates horizontal spacing -->
+
+## *3. `r survey_narratives$SurveyName[3]` (PRIMR ID: `r survey_narratives$SurveyCode[3]`)*
+
+***1)	What is the population or attribute of interest, and what will be measured, and when?***
+  
+`r survey_narratives$'Population of Interest'[3]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***2)	What refuge management goals and objective(s) does the survey support? Is/are the goal(s) or objective(s) derived from the CCP, interim objectives, an HMP, or the biological priorities? What strategies or strategy does the survey inform?***
+  
+`r survey_narratives$'Goals, Objectives, Strategies'[3]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***3)	Why is it important to conduct the survey? Describe how the survey results will be used to make better informed refuge management decisions. If survey results are used to trigger a management response, identify the management response and threshold value for comparison to survey results.***
+  
+`r survey_narratives$'Survey Importance'[3]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***4)	Is this a cooperative survey? If so, what partners are involved in the survey?***
+  
+`r survey_narratives$'Cooperative Survey?'[3]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***5) Protocol status?***
+  
+`r ifelse(with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle))[3] == "UNK; NA","None.", ifelse(with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle))[3] == "Initial Survey Instructions; NA", with(survey_narratives, paste0("Initial Survey Instructions; ", "[",InitialSurveyInstructionsLink[3],"](",InitialSurveyInstructionsLink[3],")")), ifelse(with(survey_narratives, ProtocolStatus[3] == "National Approved", paste0("National Protocol; ", ProtocolTitle[3], "[",InitialSurveyInstructionsLink[3],"](",InitialSurveyInstructionsLink[3],")")), with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle,". ","[",InitialSurveyInstructionsLink,"](",InitialSurveyInstructionsLink,")"))[3])))`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+## *4. `r survey_narratives$SurveyName[4]` (PRIMR ID: `r survey_narratives$SurveyCode[4]`)*
+  
+***1)	What is the population or attribute of interest, and what will be measured, and when?***
+  
+`r survey_narratives$'Population of Interest'[4]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***2)	What refuge management goals and objective(s) does the survey support? Is/are the goal(s) or objective(s) derived from the CCP, interim objectives, an HMP, or the biological priorities? What strategies or strategy does the survey inform?***
+  
+`r survey_narratives$'Goals, Objectives, Strategies'[4]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***3)	Why is it important to conduct the survey? Describe how the survey results will be used to make better informed refuge management decisions. If survey results are used to trigger a management response, identify the management response and threshold value for comparison to survey results.***
+  
+`r survey_narratives$'Survey Importance'[4]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***4)	Is this a cooperative survey? If so, what partners are involved in the survey?***
+  
+`r survey_narratives$'Cooperative Survey?'[4]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***5) Protocol status?***
+  
+`r ifelse(with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle))[4] == "UNK; NA","None.", ifelse(with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle))[4] == "Initial Survey Instructions; NA", with(survey_narratives, paste0("Initial Survey Instructions; ", "[",InitialSurveyInstructionsLink[4],"](",InitialSurveyInstructionsLink[4],")")), ifelse(with(survey_narratives, ProtocolStatus[4] == "National Approved", paste0("National Protocol; ", ProtocolTitle[4], "[",InitialSurveyInstructionsLink[4],"](",InitialSurveyInstructionsLink[4],")")), with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle,". ","[",InitialSurveyInstructionsLink,"](",InitialSurveyInstructionsLink,")"))[4])))`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+## *5. `r survey_narratives$SurveyName[5]` (PRIMR ID: `r survey_narratives$SurveyCode[5]`)*
+  
+***1)	What is the population or attribute of interest, and what will be measured, and when?***
+  
+`r survey_narratives$'Population of Interest'[5]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***2)	What refuge management goals and objective(s) does the survey support? Is/are the goal(s) or objective(s) derived from the CCP, interim objectives, an HMP, or the biological priorities? What strategies or strategy does the survey inform?***
+  
+`r survey_narratives$'Goals, Objectives, Strategies'[5]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***3)	Why is it important to conduct the survey? Describe how the survey results will be used to make better informed refuge management decisions. If survey results are used to trigger a management response, identify the management response and threshold value for comparison to survey results.***
+  
+`r survey_narratives$'Survey Importance'[5]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***4)	Is this a cooperative survey? If so, what partners are involved in the survey?***
+  
+`r survey_narratives$'Cooperative Survey?'[5]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***5) Protocol status?***
+  
+`r ifelse(with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle))[5] == "UNK; NA","None.", ifelse(with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle))[5] == "Initial Survey Instructions; NA", with(survey_narratives, paste0("Initial Survey Instructions; ", "[",InitialSurveyInstructionsLink[5],"](",InitialSurveyInstructionsLink[5],")")), ifelse(with(survey_narratives, ProtocolStatus[5] == "National Approved", paste0("National Protocol; ", ProtocolTitle[5], "[",InitialSurveyInstructionsLink[5],"](",InitialSurveyInstructionsLink[5],")")), with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle,". ","[",InitialSurveyInstructionsLink,"](",InitialSurveyInstructionsLink,")"))[5])))`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+## *6. `r survey_narratives$SurveyName[6]` (PRIMR ID: `r survey_narratives$SurveyCode[6]`)*
+  
+***1)	What is the population or attribute of interest, and what will be measured, and when?***
+  
+`r survey_narratives$'Population of Interest'[6]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***2)	What refuge management goals and objective(s) does the survey support? Is/are the goal(s) or objective(s) derived from the CCP, interim objectives, an HMP, or the biological priorities? What strategies or strategy does the survey inform?***
+  
+`r survey_narratives$'Goals, Objectives, Strategies'[6]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***3)	Why is it important to conduct the survey? Describe how the survey results will be used to make better informed refuge management decisions. If survey results are used to trigger a management response, identify the management response and threshold value for comparison to survey results.***
+  
+`r survey_narratives$'Survey Importance'[6]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***4)	Is this a cooperative survey? If so, what partners are involved in the survey?***
+  
+`r survey_narratives$'Cooperative Survey?'[6]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***5) Protocol status?***
+  
+`r ifelse(with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle))[6] == "UNK; NA","None.", ifelse(with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle))[6] == "Initial Survey Instructions; NA", with(survey_narratives, paste0("Initial Survey Instructions; ", "[",InitialSurveyInstructionsLink[6],"](",InitialSurveyInstructionsLink[6],")")), ifelse(with(survey_narratives, ProtocolStatus[6] == "National Approved", paste0("National Protocol; ", ProtocolTitle[6], "[",InitialSurveyInstructionsLink[6],"](",InitialSurveyInstructionsLink[6],")")), with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle,". ","[",InitialSurveyInstructionsLink,"](",InitialSurveyInstructionsLink,")"))[6])))`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+## *7. `r survey_narratives$SurveyName[7]` (PRIMR ID: `r survey_narratives$SurveyCode[7]`)*
+  
+***1)	What is the population or attribute of interest, and what will be measured, and when?***
+  
+`r survey_narratives$'Population of Interest'[7]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***2)	What refuge management goals and objective(s) does the survey support? Is/are the goal(s) or objective(s) derived from the CCP, interim objectives, an HMP, or the biological priorities? What strategies or strategy does the survey inform?***
+  
+`r survey_narratives$'Goals, Objectives, Strategies'[7]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***3)	Why is it important to conduct the survey? Describe how the survey results will be used to make better informed refuge management decisions. If survey results are used to trigger a management response, identify the management response and threshold value for comparison to survey results.***
+  
+`r survey_narratives$'Survey Importance'[7]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***4)	Is this a cooperative survey? If so, what partners are involved in the survey?***
+  
+`r survey_narratives$'Cooperative Survey?'[7]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***5) Protocol status?***
+  
+`r ifelse(with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle))[7] == "UNK; NA","None.", ifelse(with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle))[7] == "Initial Survey Instructions; NA", with(survey_narratives, paste0("Initial Survey Instructions; ", "[",InitialSurveyInstructionsLink[7],"](",InitialSurveyInstructionsLink[7],")")), ifelse(with(survey_narratives, ProtocolStatus[7] == "National Approved", paste0("National Protocol; ", ProtocolTitle[7], "[",InitialSurveyInstructionsLink[7],"](",InitialSurveyInstructionsLink[7],")")), with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle,". ","[",InitialSurveyInstructionsLink,"](",InitialSurveyInstructionsLink,")"))[7])))`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+## *8. `r survey_narratives$SurveyName[8]` (PRIMR ID: `r survey_narratives$SurveyCode[8]`)*
+  
+***1)	What is the population or attribute of interest, and what will be measured, and when?***
+  
+`r survey_narratives$'Population of Interest'[8]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***2)	What refuge management goals and objective(s) does the survey support? Is/are the goal(s) or objective(s) derived from the CCP, interim objectives, an HMP, or the biological priorities? What strategies or strategy does the survey inform?***
+  
+`r survey_narratives$'Goals, Objectives, Strategies'[8]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***3)	Why is it important to conduct the survey? Describe how the survey results will be used to make better informed refuge management decisions. If survey results are used to trigger a management response, identify the management response and threshold value for comparison to survey results.***
+  
+`r survey_narratives$'Survey Importance'[8]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***4)	Is this a cooperative survey? If so, what partners are involved in the survey?***
+  
+`r survey_narratives$'Cooperative Survey?'[8]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***5) Protocol status?***
+  
+`r ifelse(with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle))[8] == "UNK; NA","None.", ifelse(with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle))[8] == "Initial Survey Instructions; NA", with(survey_narratives, paste0("Initial Survey Instructions; ", "[",InitialSurveyInstructionsLink[8],"](",InitialSurveyInstructionsLink[8],")")), ifelse(with(survey_narratives, ProtocolStatus[8] == "National Approved", paste0("National Protocol; ", ProtocolTitle[8], "[",InitialSurveyInstructionsLink[8],"](",InitialSurveyInstructionsLink[8],")")), with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle,". ","[",InitialSurveyInstructionsLink,"](",InitialSurveyInstructionsLink,")"))[8])))`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+## *9. `r survey_narratives$SurveyName[9]` (PRIMR ID: `r survey_narratives$SurveyCode[9]`)*
+  
+***1)	What is the population or attribute of interest, and what will be measured, and when?***
+  
+`r survey_narratives$'Population of Interest'[9]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***2)	What refuge management goals and objective(s) does the survey support? Is/are the goal(s) or objective(s) derived from the CCP, interim objectives, an HMP, or the biological priorities? What strategies or strategy does the survey inform?***
+  
+`r survey_narratives$'Goals, Objectives, Strategies'[9]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***3)	Why is it important to conduct the survey? Describe how the survey results will be used to make better informed refuge management decisions. If survey results are used to trigger a management response, identify the management response and threshold value for comparison to survey results.***
+  
+`r survey_narratives$'Survey Importance'[9]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***4)	Is this a cooperative survey? If so, what partners are involved in the survey?***
+  
+`r survey_narratives$'Cooperative Survey?'[9]`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+***5) Protocol status?***
+  
+`r ifelse(with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle))[9] == "UNK; NA","None.", ifelse(with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle))[9] == "Initial Survey Instructions; NA", with(survey_narratives, paste0("Initial Survey Instructions; ", "[",InitialSurveyInstructionsLink[9],"](",InitialSurveyInstructionsLink[9],")")), ifelse(with(survey_narratives, ProtocolStatus[9] == "National Approved", paste0("National Protocol; ", ProtocolTitle[9], "[",InitialSurveyInstructionsLink[9],"](",InitialSurveyInstructionsLink[9],")")), with(survey_narratives, paste0(ProtocolStatus, "; ", ProtocolTitle,". ","[",InitialSurveyInstructionsLink,"](",InitialSurveyInstructionsLink,")"))[9])))`
+
+&nbsp; <!-- generates horizontal spacing -->
+  
+
+\newpage
+
+# References
+
+Dratch P., Phipps N., Hoang C., Edwards M. 2018. Survey protocol framework for monitoring wilderness character on national wildlife refuges. USFWS NWRS Natural Resources Program Center, Fort Collins, CO. [https://ecos.fws.gov/ServCat/Reference/Profile/108922](https://ecos.fws.gov/ServCat/Reference/Profile/108922)
+
+\newpage
+\captionsetup[table]{labelformat=empty}
+\thispagestyle{empty}
+\hoffset = -0.5in
+\blandscape
+\centering
+
+# Appendices
+
+```{r AppendixA_print, results='asis'}
+###################################################################################################
+##                          Appendix A -- Priority Resources of Concern                          ##
+###################################################################################################
+#  
+landscape(kable(roc_df[,c(6,5,8,9)], format = "latex", longtable = T,  booktabs = T, escape = FALSE, caption = "\\textbf{Appendix A:} Priority Resources of Concern", col.names = c("Resource of Concern","Rank", "Refuge Purpose", "Rationale"))) %>%
+  column_spec(1, width = "1.75in") %>%
+  column_spec(2, width = "0.75in") %>%
+  column_spec(3, width = "3.25in") %>%
+  column_spec(4, width = "3.25in") %>%
+    kable_styling(latex_options = c("hold_position"), font_size = 10)
+# width = c("1.75in","0.75in","3.25in","3.25in")) %>%
+# , "repeat_header" WILL NOT KNIT WITH THIS IN latex_options!
+```
+
+\newpage
+
+```{r AppendixB_print, results='asis'}
+#################################################################################################
+##                          Appendix B -- Nested Resources of Concern                          ##
+#################################################################################################
+## Example script for combining columns using dplyr
+#mutate(roc.rank=paste0(priority_eco_comm, " - ", roc_rank)) %>%
+
+## Longtable DOES NOT SUPPORT 'scale_down', change font and set column widths instead
+## HAVE TO MANUALLY ADJUST THE 'pack_rows' RIGHT NOW; CAN IT BE AUTOMATED?
+ 
+landscape(kable(appndx_B, format = "latex", escape = FALSE, longtable = T,  booktabs = T, caption = "\\textbf{Appendix B:} Nested Resources of Concern (Associated Species)", col.names = c("Resource of\n Concern / Rank", "Nested ROC Species /\n Guild", "Federal\n ESA Status", "Source"))) %>%
+  column_spec(1, width = "2.25in") %>%
+  column_spec(2, width = "1.75in") %>%
+  column_spec(3, width = "0.75in") %>%
+  column_spec(4, width = "4.25in") %>%  
+  kable_styling(latex_options = c("hold_position"), font_size = 10) #%>%
+# , "repeat_header" WILL NOT KNIT WITH THIS IN latex_options! 
+ # pack_rows(index=c("Priority: 1" = 24, "Priority: 2" = 29, "Priority: 3" = 33), latex_gap_space = "1em")
+# group_rows(columns=1) %>% width = c("1.75in","1.75in",".75in","4.75in")) %>%
+```
+
+\newpage
+
+```{r AppendixC_print, results='asis'}
+##Appendix C (Table 2; historic and non-selected surveys)
+## Table column names
+table2.names <- c("Survey ID No.\\textsuperscript{1}", "Name","Status","Objective","Survey Area","Start Year","End Year", "Coordinator")
+
+## Table caption 
+table2.caption <- "\\textbf{Appendix C:} Non-selected Surveys"
+
+## Print 'survey_table_appndx' of 1) historic and 2) non-priority current surveys; 
+landscape(kable(survey_table_appndx, "latex", caption = table2.caption, escape = FALSE, booktabs = T, longtable = T,  col.names = table2.names)) %>%
+  kable_styling(latex_options = c("striped", "hold_position"), font_size = 8) %>%
+  column_spec(1:8, width=c("0.65in","1.75in","0.5in","2.75in","0.75in","0.35in","0.35in","1in")) %>%
+  row_spec(0, font_size = 8) %>%
+  footnote(number = c(paste0("A unique identification number assigned by the computer.  This number is prefaced by the station cost-center code, ", refuge.costcode, ".")))
+
+# , "repeat_header" WILL NOT KNIT WITH THIS IN latex_options!
+```
+
+\centering
+\hoffset = 0in
+
+\textbf{Appendix F.} \textnormal{Environmental Action Statement (EAS)} 
+
+\vspace{1cm}
+\raggedright
+
+Within the spirit and intent of the Council on Environmental Quality's regulations for implementing the National Environmental Policy Act (NEPA) (40 CFR 1500-1508), and other statutes, orders, and policies that protect fish and wildlife resources, I have established the following administrative record and determined that the following proposed action does not require additional NEPA documentation.  
+
+Proposed Action, Alternatives, and NEPA Documentation  
+
+The proposed action is to implement an Inventory and Monitoring Plan (IMP) for `r refuge.name`. This IMP is a refinement of the `r ccp.year` Comprehensive Conservation Plan (CCP) and associated Environmental Assessment (EA) for the Refuge. This IMP provides more-specific guidance for surveys of the Refuge's fish, wildlife, plant, habitat, and abiotic resources to fulfill the purposes and help achieve goals and objectives.  
+
+The EA for `r paste0(refuge.name2, "'s")` CCP includes goals and objectives for the and Refuge and assessed the impacts associated with a range of reasonable alternatives to achieve those goals and objectives. The rationale for selection of one specific alternative for implementation is explained in the Record of Decision (ROD) or Finding of No Significant Impact (FONSI) accompanying the final CCP. The goals, objectives, and survey strategies included in this IMP fall within the bounds of those described and assessed in the CCP and EA.  
+
+Pursuant to 40 CFR 1502.9, no additional NEPA documentation is required to implement this IMP beyond the EA and FONSI prepared concurrently with the CCP.  No substantial changes to the proposed action alternative that was identified, analyzed, and selected for implementation within the CCP, EA, and FONSI are proposed through this IMP. Similarly, no significant new information or circumstances exist relevant to environmental concerns and bearing on the proposed action or its impacts.  
+
+In accordance with 43 CRF 46.205 and 40 CFR 1508.4, some surveys within this IMP are covered by the following Departmental categorical exclusion because they would not have significant environmental effects.  
+
+“Research, inventory, and information collection activities directly related to the conservation of fish and wildlife resources which involve negligible animal mortality or habitat destruction, no introduction of contaminants, or no introduction of organisms not indigenous to the affected ecosystem.”  516 DM 8.5B(1)  
+
+\vspace{2cm}
+
+\noindent\rule{8cm}{0.4pt} \hspace{4cm} \rule{4cm}{0.4pt}
+Project Leader/Refuge Manager \hspace{7cm} Date 
+
+\vspace{2cm}
+
+Reference:
+
+U.S. Fish and Wildlife Service. `r ccp.year`.  *North Dakota Wetland Management Districts Comprehensive Conservation Plan, 180 pp.*
+ 
+\centering
+
+# IMP Revision Signature Page
+
+![](revision_page.jpg)
