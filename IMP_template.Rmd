@@ -5,7 +5,7 @@ author:
 - \LARGE\emph{IMP Template National Wildlife Refuge Complex}
 date: "2020"
 header-includes:
-  - \usepackage{array,titling,caption,lscape,booktabs,float,geometry,changepage}
+  - \usepackage{array,titling,caption,pdflscape,booktabs,float,geometry,changepage}
   - \usepackage[labelfont=it]{caption}
   - \captionsetup[figure]{labelformat=empty}
   - \pretitle{\begin{center}\LARGE\includegraphics[width=15cm]{fws_banner.png}\\[\bigskipamount]}
@@ -42,8 +42,12 @@ library(dbplyr)
 library(esri2sf)
 require(tidyselect)
 # tinytex::install_tinytex(repository = 'http://mirrors.ibiblio.org/pub/mirrors/CTAN/')
+# install the R package
+# install.packages('tinytex')
 
-
+# setup the external stuff and configure
+# tinytex::install_tinytex(TRUE)
+library(tinytex)
 
 ## Function to change date fields from UNIX to human readable in tables imported from PRIMR
 fix_date <- function(x) as.POSIXct(x/1000, origin = "1970-01-01")
@@ -270,16 +274,16 @@ roc_df <- roc_df1[roc_df1$station_costcode == refuge.costcode,]
 species_url <- "https://services.arcgis.com/QVENGdaPbd4LUkLV/arcgis/rest/services/service_aa5abb632da5453e81616a071201e113/FeatureServer/2"
 
 species_df <- paste(species_url, "query", sep = "/") %>% 
-  esri2sf:::getEsriFeatures(fields = "*", where = "1=1", bbox = NULL, token) %>% #runs query and returns all attributes except any attribute that is null for all records. MAY NEED TO ADD 'bbox = NULL, ' AFTER UPDATING?
-  lapply(function(i) {
-    i <- lapply(i, Filter, f = Negate(is.null))
+                esri2sf:::getEsriFeatures(fields = "*", where = "1=1", bbox = NULL, token) %>% #runs query and returns all attributes except any attribute that is null for all records. MAY NEED TO ADD 'bbox = NULL, ' AFTER UPDATING?
+                lapply(function(i) {
+                    i <- lapply(i, Filter, f = Negate(is.null))
     # Return row
-    i$attributes
-  }) %>%
-  bind_rows() %>% 
-  mutate_at(vars(contains("date")), fix_date) %>% #fix date fields using fix_date funtion defined above.
-  right_join(., roc_df, by = c("parentglobalid" = "globalid")) %>% #join to the roc_df dataframe which has the complex, refuge name, and stationID fields, roc_rank, roc name.
-  select(station_costcode, parentglobalid, complex, station, roc_rank, priority_eco_comm, priority_spec_cat, guild, common_name, federal_status, state_status, source_name)#select subset of columns needed for the IMP Template ROC nested ROCs
+                    i$attributes
+                    }) %>%
+                bind_rows() %>% 
+                mutate_at(vars(contains("date")), fix_date) %>% #fix date fields using fix_date funtion defined above.
+                right_join(., roc_df, by = c("parentglobalid" = "globalid")) %>% #join to the roc_df dataframe which has the complex, refuge name, and stationID fields, roc_rank, roc name.
+                select(station_costcode, parentglobalid, complex, station, roc_rank, priority_eco_comm, priority_spec_cat, guild, common_name, federal_status, state_status, source_name)#select subset of columns needed for the IMP Template ROC nested ROCs
 
 ## Create a column to address when a guild but not species provided in the table
 species_df$name_guild <- with(species_df, ifelse(is.na(common_name), guild, common_name))
@@ -290,20 +294,21 @@ species_df$name_guild <- with(species_df, ifelse(is.na(common_name), guild, comm
 ## Subset the 'species_df' table using 'station_costcode' and refuge.costcode 
 ## And 'sanitize' LaTeX special characters in table text by escaping them with a preceding '\\'
 appndx_B <- species_df %>%
-                  filter(station_costcode==refuge.costcode) %>%
-                  arrange(roc_rank) %>%
-                  select(priority_eco_comm, roc_rank, name_guild, federal_status, source_name) %>%
-                  mutate_all(list(~replace_na(.,"-"))) %>%
-                  mutate(roc.rank=paste0(priority_eco_comm, " - ", roc_rank), .before=1, .keep="unused") %>%
-                  apply(., MARGIN=2, function(x) gsub("amp;amp;", "", x)) %>%
-                  apply(., MARGIN=2, function(x) gsub("#", "\\#", x, fixed = T)) %>%
-                  apply(., MARGIN=2, function(x) gsub("%", "\\%", x, fixed = T)) %>%
-                  apply(., MARGIN=2, function(x) gsub("&", "\\&", x, fixed = T)) %>%
-                  apply(., MARGIN=2, function(x) gsub("$", "\\$", x, fixed = T)) %>%
-                  apply(., MARGIN=2, function(x) gsub("~", "\\textasciitilde{}", x, fixed = T)) %>%
-                  apply(., MARGIN=2, function(x) gsub("_", "\\_", x, fixed = T)) %>%
-                  apply(., MARGIN=2, function(x) gsub(pattern = ('\\\\'), "\\textbackslash{}", x, fixed = T)) %>%
-                  apply(., MARGIN=2, function(x) gsub("", "!?!", x, fixed = T)) 
+              filter(station_costcode==refuge.costcode) %>%
+              arrange(roc_rank) %>%
+              select(priority_eco_comm, roc_rank, name_guild, federal_status, source_name) %>%
+              mutate_all(list(~replace_na(.,"-"))) %>%
+              mutate(roc.rank=paste0(priority_eco_comm, " - ", roc_rank), .before=1, .keep="unused") %>%
+              apply(., MARGIN=2, function(x) gsub("amp;amp;", "", x)) %>%
+              apply(., MARGIN=2, function(x) gsub("#", "\\#", x, fixed = T)) %>%
+              apply(., MARGIN=2, function(x) gsub("%", "\\%", x, fixed = T)) %>%
+              apply(., MARGIN=2, function(x) gsub("&", "\\&", x, fixed = T)) %>%
+              apply(., MARGIN=2, function(x) gsub("$", "\\$", x, fixed = T)) %>%
+              apply(., MARGIN=2, function(x) gsub("~", "\\textasciitilde{}", x, fixed = T)) %>%
+              apply(., MARGIN=2, function(x) gsub("_", "\\_", x, fixed = T)) %>%
+              apply(., MARGIN=2, function(x) gsub(pattern = ('\\\\'), "\\textbackslash{}", x, fixed = T)) %>%
+              apply(., MARGIN=2, function(x) gsub("", "!?!", x, fixed = T))%>%
+              as_tibble(.) 
 
 ## Example script for combining columns using dplyr
 #mutate(roc.rank=paste0(priority_eco_comm, " - ", roc_rank)) %>%
@@ -778,10 +783,10 @@ survey_narratives <- dplyr::select(dim_survey, c(SurveyPriority, SurveyName, Sur
 Dratch P., Phipps N., Hoang C., Edwards M. 2018. Survey protocol framework for monitoring wilderness character on national wildlife refuges. USFWS NWRS Natural Resources Program Center, Fort Collins, CO. [https://ecos.fws.gov/ServCat/Reference/Profile/108922](https://ecos.fws.gov/ServCat/Reference/Profile/108922)
 
 \newpage
+\blandscape
 \captionsetup[table]{labelformat=empty}
 \thispagestyle{empty}
 \hoffset = -0.5in
-\blandscape
 \centering
 
 # Appendices
@@ -791,12 +796,12 @@ Dratch P., Phipps N., Hoang C., Edwards M. 2018. Survey protocol framework for m
 ##                          Appendix A -- Priority Resources of Concern                          ##
 ###################################################################################################
 #  
-landscape(kable(roc_df[,c(6,5,8,9)], format = "latex", longtable = T,  booktabs = T, escape = FALSE, caption = "\\textbf{Appendix A:} Priority Resources of Concern", col.names = c("Resource of Concern","Rank", "Refuge Purpose", "Rationale"))) %>%
+kable(roc_df[,c(6,5,8,9)], format = "latex", longtable = T,  booktabs = T, escape = FALSE, caption = "\\textbf{Appendix A:} Priority Resources of Concern", col.names = c("Resource of Concern","Rank", "Refuge Purpose", "Rationale")) %>%
   column_spec(1, width = "1.75in") %>%
   column_spec(2, width = "0.75in") %>%
   column_spec(3, width = "3.25in") %>%
   column_spec(4, width = "3.25in") %>%
-    kable_styling(latex_options = c("hold_position"), font_size = 10)
+    kable_styling(latex_options = c("hold_position", "repeat_header"), font_size = 10)
 # width = c("1.75in","0.75in","3.25in","3.25in")) %>%
 # , "repeat_header" WILL NOT KNIT WITH THIS IN latex_options!
 ```
@@ -813,12 +818,12 @@ landscape(kable(roc_df[,c(6,5,8,9)], format = "latex", longtable = T,  booktabs 
 ## Longtable DOES NOT SUPPORT 'scale_down', change font and set column widths instead
 ## HAVE TO MANUALLY ADJUST THE 'pack_rows' RIGHT NOW; CAN IT BE AUTOMATED?
  
-landscape(kable(appndx_B, format = "latex", escape = FALSE, longtable = T,  booktabs = T, caption = "\\textbf{Appendix B:} Nested Resources of Concern (Associated Species)", col.names = c("Resource of\n Concern / Rank", "Nested ROC Species /\n Guild", "Federal\n ESA Status", "Source"))) %>%
+kable(appndx_B, format = "latex", escape = FALSE, longtable = T,  booktabs = T, caption = "\\textbf{Appendix B:} Nested Resources of Concern (Associated Species)", col.names = c("Resource of\n Concern / Rank", "Nested ROC Species /\n Guild", "Federal\n ESA Status", "Source")) %>%
   column_spec(1, width = "2.25in") %>%
   column_spec(2, width = "1.75in") %>%
   column_spec(3, width = "0.75in") %>%
   column_spec(4, width = "4.25in") %>%  
-  kable_styling(latex_options = c("hold_position"), font_size = 10) #%>%
+  kable_styling(latex_options = c("hold_position", "repeat_header"), font_size = 10) #%>%
 # , "repeat_header" WILL NOT KNIT WITH THIS IN latex_options! 
  # pack_rows(index=c("Priority: 1" = 24, "Priority: 2" = 29, "Priority: 3" = 33), latex_gap_space = "1em")
 # group_rows(columns=1) %>% width = c("1.75in","1.75in",".75in","4.75in")) %>%
@@ -835,8 +840,8 @@ table2.names <- c("Survey ID No.\\textsuperscript{1}", "Name","Status","Objectiv
 table2.caption <- "\\textbf{Appendix C:} Non-selected Surveys"
 
 ## Print 'survey_table_appndx' of 1) historic and 2) non-priority current surveys; 
-landscape(kable(survey_table_appndx, "latex", caption = table2.caption, escape = FALSE, booktabs = T, longtable = T,  col.names = table2.names)) %>%
-  kable_styling(latex_options = c("striped", "hold_position"), font_size = 8) %>%
+kable(survey_table_appndx, "latex", caption = table2.caption, escape = FALSE, booktabs = T, longtable = T,  col.names = table2.names) %>%
+  kable_styling(latex_options = c("striped", "hold_position", "repeat_header"), font_size = 8) %>%
   column_spec(1:8, width=c("0.65in","1.75in","0.5in","2.75in","0.75in","0.35in","0.35in","1in")) %>%
   row_spec(0, font_size = 8) %>%
   footnote(number = c(paste0("A unique identification number assigned by the computer.  This number is prefaced by the station cost-center code, ", refuge.costcode, ".")))
@@ -844,6 +849,8 @@ landscape(kable(survey_table_appndx, "latex", caption = table2.caption, escape =
 # , "repeat_header" WILL NOT KNIT WITH THIS IN latex_options!
 ```
 
+\newpage
+\elandscape
 \centering
 \hoffset = 0in
 
